@@ -62,7 +62,7 @@ class MainActivity : AppCompatActivity() {
         val client = OkHttpClient()
         val body = json.toRequestBody("application/json".toMediaTypeOrNull())
         val request = Request.Builder()
-            .url("http://192.168.1.60:5000/bbox")
+            .url("http://192.168.1.20:5000/bbox")
             .post(body)
             .build()
         client.newCall(request).enqueue(object : Callback {
@@ -82,7 +82,7 @@ class MainActivity : AppCompatActivity() {
         thread {
             while (true) {
                 try {
-                    val url = URL("http://192.168.1.60:5000/frame")
+                    val url = URL("http://192.168.1.20:5000/frame")
                     val bmp = BitmapFactory.decodeStream(url.openConnection().getInputStream())
 
                     println("Frame received from server")  // This won't be reached if decode fails
