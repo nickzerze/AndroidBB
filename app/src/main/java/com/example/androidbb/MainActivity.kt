@@ -62,6 +62,7 @@ class MainActivity : AppCompatActivity() {
         val client = OkHttpClient()
         val body = json.toRequestBody("application/json".toMediaTypeOrNull())
         val request = Request.Builder()
+        //#.url("http://192.168.1.20:5000/bbox")
             .url("http://192.168.1.20:5000/bbox")
             .post(body)
             .build()
