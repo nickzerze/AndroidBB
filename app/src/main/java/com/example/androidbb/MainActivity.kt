@@ -5,6 +5,8 @@ import android.graphics.RectF
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.widget.ImageView
+import android.widget.Spinner
+import android.widget.ArrayAdapter
 import okhttp3.*
 import org.json.JSONObject
 import java.io.IOException
@@ -12,19 +14,21 @@ import java.net.URL
 import kotlin.concurrent.thread
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.net.NetworkInterface
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-
-
 
 class MainActivity : AppCompatActivity() {
 
     private var SERVER_URL = ""
     private lateinit var imageView: ImageView
     private lateinit var overlay: BoundingBoxOverlay
+    private lateinit var trackerSpinner: Spinner
+
     private var lastServerFrameTimestamp = 0.0
     private var lastPhoneReceivedTimestamp = 0.0
 
+    private var selectedTracker = "CSRT"   // Default tracker
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,22 +36,30 @@ class MainActivity : AppCompatActivity() {
 
         imageView = findViewById(R.id.imageView)
         overlay = findViewById(R.id.boundingBoxOverlay)
+        trackerSpinner = findViewById(R.id.trackerSpinner)
 
+        // ------------------ TRACKER SELECTOR ------------------
+        val trackers = listOf("CSRT", "KCF", "MOSSE", "MIL", "TLD", "MEDIAN")
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, trackers)
+        trackerSpinner.adapter = adapter
+
+        trackerSpinner.setOnItemSelectedListener(object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(
+                parent: android.widget.AdapterView<*>?,
+                view: android.view.View?,
+                position: Int,
+                id: Long
+            ) {
+                selectedTracker = trackers[position]
+                println("Tracker selected: $selectedTracker")
+            }
+
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+        })
+        // ------------------------------------------------------
+
+        // When user draws a bounding box:
         overlay.onBoxSelected = { rect ->
-            val viewWidth = imageView.width.toFloat()
-            val viewHeight = imageView.height.toFloat()
-
-//            val normalizedX = rect.left / viewWidth
-//            val normalizedY = rect.top / viewHeight
-//            val normalizedW = rect.width() / viewWidth
-//            val normalizedH = rect.height() / viewHeight
-//
-//            val json = JSONObject()
-//            json.put("x", normalizedX)
-//            json.put("y", normalizedY)
-//            json.put("width", normalizedW)
-//            json.put("height", normalizedH)
-
             val normLeft = rect.left / imageView.width
             val normTop = rect.top / imageView.height
             val normWidth = rect.width() / imageView.width
@@ -62,10 +74,14 @@ class MainActivity : AppCompatActivity() {
             json.put("server_frame_ts", lastServerFrameTimestamp)
             json.put("client_recv_ts", lastPhoneReceivedTimestamp)
 
+            // ------------- ADD TRACKER NAME ---------------
+            json.put("tracker", selectedTracker)
+            // ----------------------------------------------
 
             sendBoundingBoxToServer(json.toString())
         }
 
+        // Auto-find server IP (your existing code)
         thread {
             val ip = findServerIP()
             if (ip == null) {
@@ -78,24 +94,21 @@ class MainActivity : AppCompatActivity() {
 
             runOnUiThread { startReceivingFrames() }
         }
-
     }
 
     private fun sendBoundingBoxToServer(json: String) {
         val client = OkHttpClient()
         val body = json.toRequestBody("application/json".toMediaTypeOrNull())
         val request = Request.Builder()
-            //.url("http://192.168.108.200:5000/bbox")
             .url("$SERVER_URL/bbox")
             .post(body)
             .build()
+
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {}
             override fun onResponse(call: Call, response: Response) {
                 if (response.isSuccessful) {
-                    runOnUiThread {
-                        overlay.clearBox()  // ✅ this clears the red box
-                    }
+                    runOnUiThread { overlay.clearBox() }
                 }
                 response.close()
             }
@@ -106,33 +119,20 @@ class MainActivity : AppCompatActivity() {
         thread {
             while (true) {
                 try {
-                    //val url = URL("http://192.168.108.200:5000/frame")
                     val url = URL("$SERVER_URL/frame")
-
-                    // --- OPEN CONNECTION (needed to read headers) ---
                     val connection = url.openConnection()
                     connection.connect()
 
-                    // --- READ SERVER TIMESTAMP HEADER ---
                     val serverTsHeader = connection.getHeaderField("X-Server-Timestamp")
                     val serverFrameTimestamp = serverTsHeader?.toDoubleOrNull() ?: 0.0
-
-                    // --- PHONE RECEIVED TIMESTAMP ---
                     val phoneReceivedTimestamp = System.currentTimeMillis() / 1000.0
 
-                    // --- SAVE THEM TO GLOBAL VARIABLES ---
                     lastServerFrameTimestamp = serverFrameTimestamp
                     lastPhoneReceivedTimestamp = phoneReceivedTimestamp
 
-                    // --- DECODE IMAGE ---
                     val bmp = BitmapFactory.decodeStream(connection.getInputStream())
 
-
-                    println("Frame received from server")  // This won't be reached if decode fails
-
-                    runOnUiThread {
-                        imageView.setImageBitmap(bmp)
-                    }
+                    runOnUiThread { imageView.setImageBitmap(bmp) }
                     Thread.sleep(100)
 
                 } catch (e: Exception) {
@@ -145,39 +145,24 @@ class MainActivity : AppCompatActivity() {
 
     private fun getSubnet(): String? {
         try {
-            val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
-
+            val interfaces = NetworkInterface.getNetworkInterfaces()
             for (iface in interfaces) {
                 val ifaceName = iface.displayName.lowercase()
 
-                // We only care about hotspot / wifi AP interfaces:
                 if (!ifaceName.contains("wlan") &&
                     !ifaceName.contains("ap") &&
                     !ifaceName.contains("wifi")) continue
 
                 for (addr in iface.inetAddresses) {
                     val ip = addr.hostAddress ?: continue
-
-                    // skip IPv6
                     if (ip.contains(":")) continue
-
-                    // Only IPv4 remains
                     val parts = ip.split(".")
-                    if (parts.size == 4) {
-                        return "${parts[0]}.${parts[1]}.${parts[2]}."
-                    }
+                    if (parts.size == 4) return "${parts[0]}.${parts[1]}.${parts[2]}."
                 }
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
+        } catch (e: Exception) { e.printStackTrace() }
         return null
     }
-
-
-
-
 
     private fun findServerIP(): String? {
         val base = getSubnet() ?: return null
@@ -195,7 +180,6 @@ class MainActivity : AppCompatActivity() {
                     conn.connectTimeout = 50
                     conn.readTimeout = 50
                     conn.getInputStream().close()
-
                     synchronized(result) {
                         if (result[0] == null) result[0] = testIp
                     }
@@ -205,11 +189,6 @@ class MainActivity : AppCompatActivity() {
 
         executor.shutdown()
         executor.awaitTermination(1, TimeUnit.SECONDS)
-
         return result[0]
     }
-
-
-
-
 }
